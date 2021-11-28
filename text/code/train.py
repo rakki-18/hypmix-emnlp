@@ -15,13 +15,15 @@ from torch.autograd import Variable
 from torch.utils.data import Dataset
 import optimizers
 import pandas as pd
+
 df = pd.DataFrame()
 
 
-
+import geoopt.manifolds.stereographic.math as pmath_geo # Doesn't give import errors
+# from geoopt import PoincareBall as pmath_geo
 from read_data import *
 from mixtext import MixText
-
+from divide_input import group
 
 parser = argparse.ArgumentParser(description='PyTorch MixText')
 
@@ -123,7 +125,7 @@ def main():
         dataset=test_set, batch_size=512, shuffle=False)
 
     # Define the model, set the optimizer
-    model = MixText(n_labels, args.mix_option).cuda()
+    model = MixText(n_labels, args.mix_option)
     model = nn.DataParallel(model)
     if args.optim == 'radam':
       optimizer = optimizers.RiemannianAdam([
@@ -211,34 +213,40 @@ def train(labeled_trainloader, unlabeled_trainloader, model, optimizer, schedule
         if not train_aug:
             try:
                 inputs_x, targets_x, inputs_x_length = labeled_train_iter.next()
+                targets_x = targets_x.type(torch.int64) # Targets are expected to be of the type torch
             except:
                 labeled_train_iter = iter(labeled_trainloader)
                 inputs_x, targets_x, inputs_x_length = labeled_train_iter.next()
+                targets_x = targets_x.type(torch.int64)
         else:
             try:
                 (inputs_x, inputs_x_aug), (targets_x, _), (inputs_x_length,
                                                            inputs_x_length_aug) = labeled_train_iter.next()
+                targets_x = targets_x.type(torch.int64)
             except:
                 labeled_train_iter = iter(labeled_trainloader)
                 (inputs_x, inputs_x_aug), (targets_x, _), (inputs_x_length,
                                                            inputs_x_length_aug) = labeled_train_iter.next()
+                targets_x = targets_x.type(torch.int64)
         try:
             (inputs_u, inputs_u2,  inputs_ori), (length_u,
                                                  length_u2,  length_ori) = unlabeled_train_iter.next()
+            
         except:
             unlabeled_train_iter = iter(unlabeled_trainloader)
             (inputs_u, inputs_u2, inputs_ori), (length_u,
                                                 length_u2, length_ori) = unlabeled_train_iter.next()
-
+            
         batch_size = inputs_x.size(0)
         batch_size_2 = inputs_ori.size(0)
         targets_x = torch.zeros(batch_size, n_labels).scatter_(
             1, targets_x.view(-1, 1), 1)
 
-        inputs_x, targets_x = inputs_x.cuda(), targets_x.cuda(non_blocking=True)
-        inputs_u = inputs_u.cuda()
-        inputs_u2 = inputs_u2.cuda()
-        inputs_ori = inputs_ori.cuda()
+        # Not running Cuda as it gave Cuda, CPU error
+        # inputs_x, targets_x = inputs_x.cuda(), targets_x.cuda(non_blocking=True)
+        # inputs_u = inputs_u.cuda()
+        # inputs_u2 = inputs_u2.cuda()
+        # inputs_ori = inputs_ori.cuda()    
 
         mask = []
 
@@ -248,10 +256,10 @@ def train(labeled_trainloader, unlabeled_trainloader, model, optimizer, schedule
             outputs_u2 = model(inputs_u2)
             outputs_ori = model(inputs_ori)
 
-            outputs_u2 = pmath_geo.expmap0(torch.softmax(outputs_u2, dim=1), c=torch.tensor([1.0], device='cuda'))
-            outputs_ori = pmath_geo.expmap0(torch.softmax(outputs_ori, dim=1), c=torch.tensor([1.0], device='cuda'))
-            p = pmath_geo.mobius_add(outputs_u2, outputs_ori, c=torch.tensor([1.0], device='cuda'))
-            p = pmath_geo.logmap0(p, c=torch.tensor([1.0], device='cuda'))
+            outputs_u2 = pmath_geo.expmap0(torch.softmax(outputs_u2, dim=1), k=torch.tensor([1.0]))
+            outputs_ori = pmath_geo.expmap0(torch.softmax(outputs_ori, dim=1), k=torch.tensor([1.0]))
+            p = pmath_geo.mobius_add(outputs_u2, outputs_ori, k=torch.tensor([1.0]))
+            p = pmath_geo.logmap0(p, k=torch.tensor([1.0]))
             
             pt = p**(1/args.T)
             targets_u = pt / pt.sum(dim=1, keepdim=True)
@@ -277,6 +285,9 @@ def train(labeled_trainloader, unlabeled_trainloader, model, optimizer, schedule
         mix_layer = mix_layer - 1
 
         if not train_aug:
+            print(" and shape of input_x is ", inputs_x.shape)
+            print(" and shape of input_u is ", inputs_u.shape)
+            print(" and shape of input_ori is ", inputs_ori.shape)
             all_inputs = torch.cat(
                 [inputs_x, inputs_u, inputs_u2, inputs_ori, inputs_ori], dim=0)
 
@@ -304,14 +315,21 @@ def train(labeled_trainloader, unlabeled_trainloader, model, optimizer, schedule
             idx2 = torch.arange(batch_size_2) + \
                 all_inputs.size(0) - batch_size_2
             idx = torch.cat([idx1, idx2], dim=0)
-
+        
         input_a, input_b = all_inputs, all_inputs[idx]
         target_a, target_b = all_targets, all_targets[idx]
         length_a, length_b = all_lengths, all_lengths[idx]
+        print("target", target_a.shape)
+        print("length", length_a.shape)
 
         if args.mix_method == 0:
             # Mix sentences' hidden representations
+            
+            input_a,input_b,target_a, target_b, length_a, length_b = group(input_a, target_a, length_a)
+            print(" and shape of input_a is ", input_a.shape)
+            print(" and shape of input_b is ", input_b.shape)
             logits = model(input_a, input_b, l, mix_layer)
+            
             mixed_target = l * target_a + (1 - l) * target_b
 
         elif args.mix_method == 1:
@@ -329,7 +347,7 @@ def train(labeled_trainloader, unlabeled_trainloader, model, optimizer, schedule
                     idx2 = torch.randperm(int(length_b[i]) - length2 + 1)[0]
                     try:
                         mixed_input.append(
-                            torch.cat((input_a[i][idx1: idx1 + length1], torch.tensor([102]).cuda(), input_b[i][idx2:idx2 + length2], torch.tensor([0]*(256-1-length1-length2)).cuda()), dim=0).unsqueeze(0))
+                            torch.cat((input_a[i][idx1: idx1 + length1], torch.tensor([102]), input_b[i][idx2:idx2 + length2], torch.tensor([0]*(256-1-length1-length2))), dim=0).unsqueeze(0))
                     except:
                         print(256 - 1 - length1 - length2,
                               idx2, length2, idx1, length1)
@@ -349,7 +367,7 @@ def train(labeled_trainloader, unlabeled_trainloader, model, optimizer, schedule
                 mixed_input = []
                 for i in range(input_a.size(0)):
                     mixed_input.append(
-                        torch.cat((input_a[i][:length_a[i]], torch.tensor([102]).cuda(), input_b[i][:length_b[i]], torch.tensor([0]*(512-1-int(length_a[i])-int(length_b[i]))).cuda()), dim=0).unsqueeze(0))
+                        torch.cat((input_a[i][:length_a[i]], torch.tensor([102]), input_b[i][:length_b[i]], torch.tensor([0]*(512-1-int(length_a[i])-int(length_b[i])))), dim=0).unsqueeze(0))
 
                 mixed_input = torch.cat(mixed_input, dim=0)
                 logits = model(mixed_input, sent_size=512)
@@ -392,7 +410,7 @@ def validate(valloader, model, criterion, epoch, mode):
         correct = 0
 
         for batch_idx, (inputs, targets, length) in enumerate(valloader):
-            inputs, targets = inputs.cuda(), targets.cuda(non_blocking=True)
+            # inputs, targets = inputs.cuda(), targets.cuda(non_blocking=True)
             outputs = model(inputs)
             loss = criterion(outputs, targets)
 

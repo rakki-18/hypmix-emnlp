@@ -20,8 +20,15 @@ class Translator:
             self.ru = pickle.load(f)
 
     def __call__(self, ori, idx):
-        out1 = self.de[idx]
-        out2 = self.ru[idx]
+        # Preventing out-of-bound errors
+        try:
+          out1 = self.de[idx]
+        except:
+          out1 = "UNK"
+        try:
+          out2 = self.ru[idx]
+        except:
+          out2 = "UNK"
         return out1, out2, ori
 
 def get_data(data_path, n_labeled_per_class, unlabeled_per_class=5000, max_seq_len=256, model='bert-base-uncased', train_aug=False):
@@ -39,10 +46,11 @@ def get_data(data_path, n_labeled_per_class, unlabeled_per_class=5000, max_seq_l
 
     """
     # Load the tokenizer for bert
+    device = 'cuda'
     tokenizer = BertTokenizer.from_pretrained(model)
 
-    train_df = pd.read_csv(data_path+'train.csv', header=None)
-    test_df = pd.read_csv(data_path+'test.csv', header=None)
+    train_df = pd.read_csv(data_path+'train.csv',nrows=2000, header=None)  # Reduced the total rows because of speed constraints
+    test_df = pd.read_csv(data_path+'test.csv', nrows=200, header=None)
 
     # Here we only use the bodies and removed titles to do the classifications
     train_labels = np.array([v-1 for v in train_df[0]])

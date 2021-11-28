@@ -17,9 +17,18 @@ The Arabic Hate Speech Classification data can be obtained from [here](https://g
 ### Running HypMix on AGNews in supervised setup with limited training data
 
 ```
-python ./code/train.py --gpu 0 --n-labeled 10 --data-path ./data/ag_news_csv/ --batch-size 8 --batch-size-u 1 --epochs 50 --val-iteration 20 --lambda-u 0 --T 0.3 --alpha 16 --mix-layers-set 6 7 9 12 --separate-mix True --save_file_name_csv ag_news_n_10.csv
+pip install -r requirements.txt
+```
+
+```
+python ./code/train.py --gpu 0 --n-labeled 10 --data-path ./data/ag_news_csv/ --batch-size 8 --batch-size-u 1 --epochs 2 --val-iteration 5 --lambda-u 0 --T 0.3 --alpha 16 --mix-layers-set 6 7 9 12 --separate-mix True --save_file_name_csv ag_news_n_10.csv
 ```
 
 ### Acknowledgement
 
 Repository forked from [MixText](https://github.com/GT-SALT/MixText).
+
+### Note
+The model was trained with a reduced dataset. The number of epochs were also reduced for time constraints.
+
+The results are in the results folder.
