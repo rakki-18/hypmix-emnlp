@@ -2,7 +2,9 @@ import torch
 import torch.nn as nn
 from transformers import *
 from transformers.modeling_bert import BertEmbeddings, BertPooler, BertLayer
-import geoopt.manifolds.poincare.math as pmath_geo
+import geoopt.manifolds.stereographic.math as pmath_geo
+# from geoopt import PoincareBall as pmath_geo
+
 
 class BertModel4Mix(BertPreTrainedModel):
     def __init__(self, config):
@@ -28,17 +30,26 @@ class BertModel4Mix(BertPreTrainedModel):
         for layer, heads in heads_to_prune.items():
             self.encoder.layer[layer].attention.prune_heads(heads)
 
-    def forward(self, input_ids,  input_ids2=None, l=None, mix_layer=1000, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None):
+    def forward(self, input_ids, inputs = [None,None], l_values=[None,None], mix_layer=1000, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None):
 
+        input_ids2 = inputs[0]
+        input_ids3 = inputs[1]
+        l1 = l_values[0]
+        l2 = l_values[1]
         if attention_mask is None:
             if input_ids2 is not None:
                 attention_mask2 = torch.ones_like(input_ids2)
+            if input_ids3 is not None:
+                attention_mask3 = torch.ones_like(input_ids3)
             attention_mask = torch.ones_like(input_ids)
 
         if token_type_ids is None:
             token_type_ids = torch.zeros_like(input_ids)
             if input_ids2 is not None:
                 token_type_ids2 = torch.zeros_like(input_ids2)
+            if input_ids3 is not None:
+                token_type_ids3 = torch.zeros_like(input_ids3)
+
 
         extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
 
@@ -55,6 +66,15 @@ class BertModel4Mix(BertPreTrainedModel):
                 dtype=torch.float32)  # fp16 compatibility
             extended_attention_mask2 = (
                 1.0 - extended_attention_mask2) * -10000.0
+        if input_ids3 is not None:
+
+            extended_attention_mask3 = attention_mask3.unsqueeze(
+                1).unsqueeze(2)
+
+            extended_attention_mask3 = extended_attention_mask3.to(
+                dtype=torch.float32)  # fp16 compatibility
+            extended_attention_mask3 = (
+                1.0 - extended_attention_mask3) * -10000.0
 
         if head_mask is not None:
             if head_mask.dim() == 1:
@@ -72,14 +92,18 @@ class BertModel4Mix(BertPreTrainedModel):
 
         embedding_output = self.embeddings(
             input_ids, position_ids=position_ids, token_type_ids=token_type_ids)
-
+        
+        
+        
         if input_ids2 is not None:
             embedding_output2 = self.embeddings(
                 input_ids2, position_ids=position_ids, token_type_ids=token_type_ids2)
-
+        if input_ids3 is not None:
+            embedding_output3 = self.embeddings(
+                input_ids3, position_ids=position_ids, token_type_ids=token_type_ids3)
         if input_ids2 is not None:
-            encoder_outputs = self.encoder(embedding_output, embedding_output2, l, mix_layer,
-                                           extended_attention_mask, extended_attention_mask2, head_mask=head_mask)
+            encoder_outputs = self.encoder(embedding_output, embedding_output2, embedding_output3, l1, l2, mix_layer,
+                                           extended_attention_mask, extended_attention_mask2,extended_attention_mask3, head_mask=head_mask)
         else:
             encoder_outputs = self.encoder(
                 embedding_output, attention_mask=extended_attention_mask, head_mask=head_mask)
@@ -102,19 +126,23 @@ class BertEncoder4Mix(nn.Module):
                                     for _ in range(config.num_hidden_layers)])
         # self.c = torch.tensor([1.0], device='cuda')
 
-    def forward(self, hidden_states, hidden_states2=None, l=None, mix_layer=1000, attention_mask=None, attention_mask2=None, head_mask=None):
+    def forward(self, hidden_states, hidden_states2=None, hidden_states3=None, l1=None, l2=None, mix_layer=1000, attention_mask=None, attention_mask2=None, attention_mask3 = None, head_mask=None):
         all_hidden_states = ()
         all_attentions = ()
 
         # Perform mix at till the mix_layer
         if mix_layer == -1:
             if hidden_states2 is not None:
-                hidden_states_1 = pmath_geo.expmap0(hidden_states, c=torch.tensor([1.0], device='cuda'))
-                hidden_states_2 = pmath_geo.expmap0(hidden_states2, c=torch.tensor([1.0], device='cuda'))
-                weighted_hidden_states_1 = pmath_geo.mobius_scalar_mul(l, hidden_states_1, c=torch.tensor([1.0], device='cuda'))
-                weighted_hidden_states_2 = pmath_geo.mobius_scalar_mul((1-l), hidden_states_2, c=torch.tensor([1.0], device='cuda'))
-                hidden_states_1_plus_2 = pmath_geo.mobius_add(weighted_hidden_states_1, weighted_hidden_states_2, c=storch.tensor([1.0], device='cuda'))
-                hidden_states = pmath_geo.logmap0(hidden_states_1_plus_2, c=torch.tensor([1.0], device='cuda'))
+                # HypMix of 3 states(x1, x2, x3)
+                hidden_states_1 = pmath_geo.expmap0(hidden_states, k=torch.tensor([1.0]))
+                hidden_states_2 = pmath_geo.expmap0(hidden_states2, k=torch.tensor([1.0]))
+                hidden_states_3 = pmath_geo.expmap0(hidden_states3, k=torch.tensor([1.0]))
+                weighted_hidden_states_1 = pmath_geo.mobius_scalar_mul(torch.Tensor([l1]), hidden_states_1, k=torch.tensor([1.0]))
+                weighted_hidden_states_2 = pmath_geo.mobius_scalar_mul(torch.Tensor([l2]), hidden_states_2, k=torch.tensor([1.0]))
+                weighted_hidden_states_3 = pmath_geo.mobius_scalar_mul(torch.Tensor([(1-l1-l2)]), hidden_states_3, k=torch.tensor([1.0]))
+                hidden_states_1_plus_2 = pmath_geo.mobius_add(weighted_hidden_states_1, weighted_hidden_states_2, k=torch.tensor([1.0]))
+                hidden_states_1_plus_2_plus_3 = pmath_geo.mobius_add(hidden_states_1_plus_2, weighted_hidden_states_3, k=torch.tensor([1.0]))
+                hidden_states = pmath_geo.logmap0(hidden_states_1_plus_2_plus_3, k=torch.tensor([1.0]))
 
         for i, layer_module in enumerate(self.layer):
             if i <= mix_layer:
@@ -133,15 +161,25 @@ class BertEncoder4Mix(nn.Module):
                     layer_outputs2 = layer_module(
                         hidden_states2, attention_mask2, head_mask[i])
                     hidden_states2 = layer_outputs2[0]
+                
+                if hidden_states3 is not None:
+                    layer_outputs3 = layer_module(
+                        hidden_states3, attention_mask3, head_mask[i])
+                    hidden_states3 = layer_outputs3[0]
+
 
             if i == mix_layer:
                 if hidden_states2 is not None:
-                    hidden_states_1 = pmath_geo.expmap0(hidden_states, c=torch.tensor([1.0], device='cuda'))
-                    hidden_states_2 = pmath_geo.expmap0(hidden_states2, c=torch.tensor([1.0], device='cuda'))
-                    weighted_hidden_states_1 = pmath_geo.mobius_scalar_mul(l, hidden_states_1, c=torch.tensor([1.0], device='cuda'))
-                    weighted_hidden_states_2 = pmath_geo.mobius_scalar_mul((1-l), hidden_states_2, c=torch.tensor([1.0], device='cuda'))
-                    hidden_states_1_plus_2 = pmath_geo.mobius_add(weighted_hidden_states_1, weighted_hidden_states_2, c=torch.tensor([1.0], device='cuda'))
-                    hidden_states = pmath_geo.logmap0(hidden_states_1_plus_2, c=torch.tensor([1.0], device='cuda'))
+                    # HypMix of 3 states(x1, x2, x3)
+                    hidden_states_1 = pmath_geo.expmap0(hidden_states, k=torch.tensor([1.0]))
+                    hidden_states_2 = pmath_geo.expmap0(hidden_states2, k=torch.tensor([1.0]))
+                    hidden_states_3 = pmath_geo.expmap0(hidden_states3, k=torch.tensor([1.0]))
+                    weighted_hidden_states_1 = pmath_geo.mobius_scalar_mul(torch.Tensor([l1]), hidden_states_1, k=torch.tensor([1.0]))
+                    weighted_hidden_states_2 = pmath_geo.mobius_scalar_mul(torch.Tensor([l2]), hidden_states_2, k=torch.tensor([1.0]))
+                    weighted_hidden_states_3 = pmath_geo.mobius_scalar_mul(torch.Tensor([(1-l1-l2)]), hidden_states_3, k=torch.tensor([1.0]))
+                    hidden_states_1_plus_2 = pmath_geo.mobius_add(weighted_hidden_states_1, weighted_hidden_states_2, k=torch.tensor([1.0]))
+                    hidden_states_1_plus_2_plus_3 = pmath_geo.mobius_add(hidden_states_1_plus_2, weighted_hidden_states_3, k=torch.tensor([1.0]))
+                    hidden_states = pmath_geo.logmap0(hidden_states_1_plus_2_plus_3, k=torch.tensor([1.0]))
 
             if i > mix_layer:
                 if self.output_hidden_states:
@@ -172,8 +210,10 @@ class MixText(nn.Module):
         super(MixText, self).__init__()
 
         if mix_option:
+            device = 'cuda'
             self.bert = BertModel4Mix.from_pretrained('bert-base-uncased')
         else:
+            device = 'cuda'
             self.bert = BertModel.from_pretrained('bert-base-uncased')
 
         self.linear = nn.Sequential(nn.Linear(768, 128),
